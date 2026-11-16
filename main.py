@@ -10,6 +10,7 @@ Test:
     pytest
 """
 
+import re
 import sqlite3
 from contextlib import closing
 from datetime import date
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, field_validator
+from pydantic_core import PydanticCustomError
 
 DB_PATH = Path(__file__).parent / "habits.db"
 
@@ -47,16 +49,25 @@ def init_db() -> None:
 init_db()
 
 
+MAX_NAME_LENGTH = 100
+DAY_PATTERN = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")  # ASCII digits only
+
+
 class HabitIn(BaseModel):
     name: str
 
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
-        v_stripped = v.strip()
-        if not v_stripped:
-            raise ValueError("Habit name cannot be empty")
-        return v_stripped
+        # PydanticCustomError keeps the message clean (no "Value error," prefix).
+        name = v.strip()
+        if not name:
+            raise PydanticCustomError("empty_name", "Habit name cannot be empty")
+        if len(name) > MAX_NAME_LENGTH:
+            raise PydanticCustomError(
+                "name_too_long", f"Habit name must be at most {MAX_NAME_LENGTH} characters"
+            )
+        return name
 
 
 class CheckinIn(BaseModel):
@@ -65,12 +76,16 @@ class CheckinIn(BaseModel):
     @field_validator("day")
     @classmethod
     def validate_day(cls, v: str) -> str:
+        if not DAY_PATTERN.fullmatch(v):
+            raise PydanticCustomError("day_format", "Day must use the format YYYY-MM-DD")
         try:
-            d = date.fromisoformat(v)
-        except (ValueError, TypeError) as err:
-            raise ValueError("Invalid date format, expected YYYY-MM-DD") from err
-        if d.isoformat() != v:
-            raise ValueError("Invalid date format, expected YYYY-MM-DD")
+            day = date.fromisoformat(v)
+        except ValueError:
+            raise PydanticCustomError(
+                "day_not_real", "'{day}' is not a real calendar date", {"day": v}
+            ) from None
+        if day > date.today():
+            raise PydanticCustomError("day_in_future", "Day cannot be in the future")
         return v
 
 
