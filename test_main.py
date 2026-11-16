@@ -2,7 +2,7 @@ from datetime import date, timedelta
 
 from fastapi.testclient import TestClient
 
-from main import app
+from main import app, calculate_streak, get_db
 
 client = TestClient(app)
 
@@ -99,6 +99,43 @@ def test_streak_duplicate_and_future():
     client.post(f"/habits/{hid}/checkin", json={"day": today.isoformat()})
     # Future check-in tomorrow
     client.post(f"/habits/{hid}/checkin", json={"day": (today + timedelta(days=1)).isoformat()})
+    r = client.get(f"/habits/{hid}/streak")
+    assert r.status_code == 200
+    assert r.json() == {"streak": 1}
+
+
+# --- calculate_streak with a fixed "today", so the result never depends on the clock ---
+
+FIXED_TODAY = date(2026, 3, 10)
+
+
+def days_ago(*offsets):
+    return {FIXED_TODAY - timedelta(days=n) for n in offsets}
+
+
+def test_calculate_streak_fixed_date_including_today():
+    assert calculate_streak(days_ago(0, 1, 2), today=FIXED_TODAY) == 3
+
+
+def test_calculate_streak_fixed_date_ending_yesterday():
+    assert calculate_streak(days_ago(1, 2), today=FIXED_TODAY) == 2
+
+
+def test_calculate_streak_fixed_date_broken():
+    assert calculate_streak(days_ago(2, 3), today=FIXED_TODAY) == 0
+
+
+def test_calculate_streak_across_month_boundary():
+    today = date(2026, 3, 1)
+    checkins = {date(2026, 3, 1), date(2026, 2, 28), date(2026, 2, 27)}
+    assert calculate_streak(checkins, today=today) == 3
+
+
+def test_streak_ignores_malformed_day_in_database():
+    hid = client.post("/habits", json={"name": "Bad data"}).json()["id"]
+    client.post(f"/habits/{hid}/checkin", json={"day": date.today().isoformat()})
+    with get_db() as conn:  # bypass the API: simulate a bad row already in the DB
+        conn.execute("INSERT INTO checkins (habit_id, day) VALUES (?, ?)", (hid, "hello"))
     r = client.get(f"/habits/{hid}/streak")
     assert r.status_code == 200
     assert r.json() == {"streak": 1}

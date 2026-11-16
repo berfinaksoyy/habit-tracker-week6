@@ -91,6 +91,12 @@ def list_checkins(habit_id: int):
 
 
 def calculate_streak(checkin_dates: set[date], today: date | None = None) -> int:
+    """Return the number of consecutive checked-in days ending today.
+
+    If today has no check-in yet, the run ending yesterday still counts: the day is
+    not over, so the streak is not broken until a full day is missed. Future dates
+    are ignored. `today` can be passed in so the rule can be tested with fixed dates.
+    """
     if today is None:
         today = date.today()
 
