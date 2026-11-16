@@ -1,10 +1,27 @@
 from datetime import date, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 
+import main
 from main import app, calculate_streak, get_db
 
 client = TestClient(app)
+
+# Freeze "today" for the endpoint and the tests, so a run that crosses midnight
+# cannot change the result (raised by CodeRabbit on PR #1).
+FROZEN_TODAY = date(2026, 3, 10)
+
+
+class FrozenDate(date):
+    @classmethod
+    def today(cls):
+        return FROZEN_TODAY
+
+
+@pytest.fixture(autouse=True)
+def frozen_clock(monkeypatch):
+    monkeypatch.setattr(main, "date", FrozenDate)
 
 
 def test_create_and_list_habit():
@@ -43,7 +60,7 @@ def test_streak_empty():
 
 def test_streak_today_only():
     hid = client.post("/habits", json={"name": "Walk dog"}).json()["id"]
-    today = date.today()
+    today = FROZEN_TODAY
     client.post(f"/habits/{hid}/checkin", json={"day": today.isoformat()})
     r = client.get(f"/habits/{hid}/streak")
     assert r.status_code == 200
@@ -52,7 +69,7 @@ def test_streak_today_only():
 
 def test_streak_consecutive_days_including_today():
     hid = client.post("/habits", json={"name": "Drink water"}).json()["id"]
-    today = date.today()
+    today = FROZEN_TODAY
     for i in range(4):
         day = today - timedelta(days=i)
         client.post(f"/habits/{hid}/checkin", json={"day": day.isoformat()})
@@ -63,7 +80,7 @@ def test_streak_consecutive_days_including_today():
 
 def test_streak_yesterday_not_today():
     hid = client.post("/habits", json={"name": "Code"}).json()["id"]
-    today = date.today()
+    today = FROZEN_TODAY
     client.post(f"/habits/{hid}/checkin", json={"day": (today - timedelta(days=1)).isoformat()})
     client.post(f"/habits/{hid}/checkin", json={"day": (today - timedelta(days=2)).isoformat()})
     r = client.get(f"/habits/{hid}/streak")
@@ -73,7 +90,7 @@ def test_streak_yesterday_not_today():
 
 def test_streak_broken():
     hid = client.post("/habits", json={"name": "Sleep early"}).json()["id"]
-    today = date.today()
+    today = FROZEN_TODAY
     client.post(f"/habits/{hid}/checkin", json={"day": (today - timedelta(days=2)).isoformat()})
     client.post(f"/habits/{hid}/checkin", json={"day": (today - timedelta(days=3)).isoformat()})
     r = client.get(f"/habits/{hid}/streak")
@@ -83,7 +100,7 @@ def test_streak_broken():
 
 def test_streak_gap_with_today():
     hid = client.post("/habits", json={"name": "Journal"}).json()["id"]
-    today = date.today()
+    today = FROZEN_TODAY
     client.post(f"/habits/{hid}/checkin", json={"day": today.isoformat()})
     client.post(f"/habits/{hid}/checkin", json={"day": (today - timedelta(days=2)).isoformat()})
     r = client.get(f"/habits/{hid}/streak")
@@ -93,7 +110,7 @@ def test_streak_gap_with_today():
 
 def test_streak_duplicate_and_future():
     hid = client.post("/habits", json={"name": "Floss"}).json()["id"]
-    today = date.today()
+    today = FROZEN_TODAY
     # Duplicate check-in today
     client.post(f"/habits/{hid}/checkin", json={"day": today.isoformat()})
     client.post(f"/habits/{hid}/checkin", json={"day": today.isoformat()})
@@ -133,7 +150,7 @@ def test_calculate_streak_across_month_boundary():
 
 def test_streak_ignores_malformed_day_in_database():
     hid = client.post("/habits", json={"name": "Bad data"}).json()["id"]
-    client.post(f"/habits/{hid}/checkin", json={"day": date.today().isoformat()})
+    client.post(f"/habits/{hid}/checkin", json={"day": FROZEN_TODAY.isoformat()})
     with get_db() as conn:  # bypass the API: simulate a bad row already in the DB
         conn.execute("INSERT INTO checkins (habit_id, day) VALUES (?, ?)", (hid, "hello"))
     r = client.get(f"/habits/{hid}/streak")
